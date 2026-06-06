@@ -5,14 +5,14 @@ local sep = uv.os_uname().sysname == 'Windows_NT' and '\\' or '/'
 local cursor_pattern = '{{_cursor_}}'
 local renderer = {
   expressions = {},
-  expression_replacer_map = {}
+  expression_replacer_map = {},
 }
 
 ---@param expr string
 ---@param replacer function(match: string): string
-renderer.register = function (expr, replacer)
+renderer.register = function(expr, replacer)
   if renderer.expression_replacer_map[expr] then
-    vim.notify('The expression '..expr..' is registered already. Will not add the replacer.', vim.log.levels.ERROR)
+    vim.notify('The expression ' .. expr .. ' is registered already. Will not add the replacer.', vim.log.levels.ERROR)
     return
   end
   table.insert(renderer.expressions, expr)
@@ -20,13 +20,27 @@ renderer.register = function (expr, replacer)
 end
 
 renderer.register_builtins = function()
-  renderer.register('{{_date_}}', function(_) return os.date('%Y-%m-%d %H:%M:%S') end)
-  renderer.register(cursor_pattern, function(_) return '' end)
-  renderer.register('{{_file_name_}}', function(_) return fn.expand('%:t:r') end)
-  renderer.register('{{_author_}}', function(_) return temp.author end)
-  renderer.register('{{_email_}}', function(_) return temp.email end)
-  renderer.register('{{_variable_}}', function(_) return vim.fn.input('Variable name: ', '') end)
-  renderer.register('{{_upper_file_}}', function(_) return string.upper(fn.expand('%:t:r')) end)
+  renderer.register('{{_date_}}', function(_)
+    return os.date('%Y-%m-%d %H:%M:%S')
+  end)
+  renderer.register(cursor_pattern, function(_)
+    return ''
+  end)
+  renderer.register('{{_file_name_}}', function(_)
+    return fn.expand('%:t:r')
+  end)
+  renderer.register('{{_author_}}', function(_)
+    return temp.author
+  end)
+  renderer.register('{{_email_}}', function(_)
+    return temp.email
+  end)
+  renderer.register('{{_variable_}}', function(_)
+    return vim.fn.input('Variable name: ', '')
+  end)
+  renderer.register('{{_upper_file_}}', function(_)
+    return string.upper(fn.expand('%:t:r'))
+  end)
   renderer.register('{{_lua:(.-)_}}', function(matched_expression)
     return load('return ' .. matched_expression)()
   end)
@@ -37,21 +51,21 @@ renderer.register_builtins = function()
     return os.date('%c', os.time(t))
   end)
   renderer.register('{{_camel_file_}}', function(_)
-      local file_name = fn.expand('%:t:r')
-      local camel_case_file_name = ''
-      local up_next = true
-      for i = 1, #file_name do
-        local char = file_name:sub(i,i)
-        if char == '_' then
-          up_next = true
-        elseif up_next then
-          camel_case_file_name = camel_case_file_name..string.upper(char)
-          up_next = false
-        else
-          camel_case_file_name = camel_case_file_name..char
-        end
+    local file_name = fn.expand('%:t:r')
+    local camel_case_file_name = ''
+    local up_next = true
+    for i = 1, #file_name do
+      local char = file_name:sub(i, i)
+      if char == '_' then
+        up_next = true
+      elseif up_next then
+        camel_case_file_name = camel_case_file_name .. string.upper(char)
+        up_next = false
+      else
+        camel_case_file_name = camel_case_file_name .. char
       end
-      return camel_case_file_name
+    end
+    return camel_case_file_name
   end)
 end
 
@@ -176,9 +190,9 @@ end
 function temp:generate_template(args)
   local data = parse_args(args)
 
-  if data.file then
-    create_and_load(data.file)
-  end
+  --if data.file then
+  --  create_and_load(data.file)
+  --end
 
   local current_buf = api.nvim_get_current_buf()
 
@@ -202,7 +216,7 @@ function temp:generate_template(args)
       for i, v in ipairs(tbl) do
         if i == 1 then
           local line_data = vim.split(v, '%s')
-          if #line_data == 2 and ";;" == line_data[1] then
+          if #line_data == 2 and ';;' == line_data[1] then
             skip_lines = skip_lines + 1
             goto continue
           end
@@ -270,24 +284,66 @@ function temp.setup(config)
     return
   end
 
-  api.nvim_create_autocmd({ 'BufEnter', 'BufNewFile' }, {
-    pattern = temp.temp_dir .. '/*',
-    group = api.nvim_create_augroup('Template', { clear = false }),
-    callback = function(opt)
-      if vim.bo[opt.buf].filetype == 'smarty' then
-        local fname = api.nvim_buf_get_name(opt.buf)
-        local row = vim.fn.readfile(fname, '', 1)[1]
-        local lang = vim.split(row, '%s')[2]
-        vim.treesitter.start(opt.buf, lang)
-        api.nvim_buf_add_highlight(opt.buf, 0, 'Comment', 0, 0, -1)
+  api.nvim_create_autocmd({ 'BufNewFile' }, {
+    callback = function(args)
+      temp:generate_template(args.fargs)
+    end,
+    complete = function(arg, line)
+      if not temp.temp_dir then
+        vim.notify('[template.nvim] please config the temp_dir variable')
+        return {}
+      end
+
+      local list = temp.get_temp_list()
+
+      local function match_item(ft)
+        return vim.tbl_map(function(s)
+          s = vim.fn.fnamemodify(s, ':t:r')
+          if arg and string.match(s, '^' .. arg) then
+            return s
+          end
+          return s
+        end, list[ft])
+      end
+
+      local ft = api.nvim_buf_get_option(0, 'filetype')
+      if list[ft] then
+        return match_item(ft)
+      end
+
+      local args = vim.split(line, '%s+', { trimempty = true })
+      if #args == 1 and not list[ft] then
         return
       end
 
-      if temp.in_template(opt.buf) then
-        vim.diagnostic.disable(opt.buf)
+      if #args >= 2 and args[2]:find('%.%w+$') then
+        ft = vim.filetype.match({ filename = args[2] })
+      end
+
+      if ft then
+        return match_item(ft)
       end
     end,
   })
+
+  --api.nvim_create_autocmd({ 'BufNewFile' }, {
+  --  pattern = temp.temp_dir .. '/*',
+  --  group = api.nvim_create_augroup('Template', { clear = false }),
+  --  callback = function(opt)
+  --    if vim.bo[opt.buf].filetype == 'smarty' then
+  --      local fname = api.nvim_buf_get_name(opt.buf)
+  --      local row = vim.fn.readfile(fname, '', 1)[1]
+  --      local lang = vim.split(row, '%s')[2]
+  --      vim.treesitter.start(opt.buf, lang)
+  --      api.nvim_buf_add_highlight(opt.buf, 0, 'Comment', 0, 0, -1)
+  --      return
+  --    end
+
+  --    if temp.in_template(opt.buf) then
+  --      vim.diagnostic.disable(opt.buf)
+  --    end
+  --  end,
+  --})
 end
 
 return temp
